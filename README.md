@@ -1,7 +1,7 @@
-# Retrieval lab — milestone 1
+# Retrieval lab — milestones 1, 2, and 3
 
-Local keyword retrieval in Python using BM25. Six sample documents live in
-`data/documents.json`. No AI services, LLMs, embeddings, vector databases,
+Local keyword retrieval in Python using BM25. The local document collection lives in
+`data/documents.json`; milestone 1 included six sample documents. No AI services, LLMs, embeddings, vector databases,
 PostgreSQL, or web UI are used. Search uses the Python standard library;
 pytest is the only development dependency.
 
@@ -63,16 +63,18 @@ tokens returns no results.
 ## Query flow
 
 1. Load and validate the JSON document list.
-2. Lowercase title + text and extract letter/digit runs, splitting on punctuation
-   (including underscores) and whitespace. Tokenize the query identically.
-3. Compute term counts, document lengths, average length, and document frequency.
-4. Sum BM25 contributions for each distinct query term in each document.
-5. Remove zero scores, sort descending, and display the top k matches.
+2. Build an index: lowercase title + text and extract letter/digit runs, splitting
+   on punctuation (including underscores) and whitespace.
+3. Store tokens, term counts, lengths, average length, document frequency, and IDF
+   once during construction; also build term-to-document-ID postings.
+4. For each query, tokenize it identically and union the matching postings.
+5. Score only those candidate IDs using the existing BM25 statistics.
+6. Remove zero scores, sort descending, and display the top k matches.
 
 There is no stemming, stop-word removal, phrase matching, or query expansion.
-Repeated query terms count once. Statistics are rebuilt on every search, so new
-documents are immediately searchable. This implementation scans all documents
-and is intended for small local corpora.
+Repeated query terms count once. An index reuses statistics across searches.
+A new CLI search process builds a fresh index, so newly added documents are
+searchable on the next invocation. Search visits only candidate documents.
 
 ## Storage and scope
 
@@ -84,4 +86,237 @@ Writes replace the JSON file atomically to prevent partial files. Concurrent
 writers are not supported; run one add command at a time. Malformed stores
 produce an error instead of being overwritten. Tests use temporary storage for
 add operations and cover retrieval, scores, normalization, top-k, tokenization,
-and empty/unmatched inputs. Milestone 1 ends at this local CLI.
+and empty/unmatched inputs. The project remains a local CLI.
+
+
+## Milestone 2: reusable in-memory BM25 index
+
+An **index** is a prepared representation of a document collection that makes
+retrieval work reusable. Here it consists of token lists and calculated BM25
+statistics held in a Python object. Milestone 2 did not include an inverted
+index; milestone 3 adds the postings described below.
+
+Milestone 1 repeated document tokenization, counting, and IDF calculation on every
+query. These values depend on the corpus, not the query, so repeating that work
+for an unchanged corpus is wasteful. Constructing `BM25Index` does that work once:
+
+```python
+from src.bm25_search import BM25Index
+from src.store import load_documents
+
+index = BM25Index(load_documents())
+python_results = index.search("python programming")
+server_results = index.search("SSH security server")
+bread_results = index.search("bread water", top_k=3)
+```
+
+The index stores copied documents, tokenized title + text, document lengths,
+document count, average length, per-document term frequencies, corpus document
+frequencies, and IDF values for every indexed term. All per-document lists use
+the same positions, so a document's tokens, length, and counts line up.
+
+For each search, only the query is tokenized. Its distinct terms are scored
+against the stored term counts and IDF, then positive matches are sorted and
+truncated to top-k. Avoiding corpus tokenization and statistic construction
+removes repeated work. Milestone 2 still scanned every document. Milestone 3
+replaces that scan with postings-based candidate selection.
+
+The counts mean different things:
+
+| Value | Meaning | Example |
+| --- | --- | --- |
+| Document count | Total documents in the corpus | 10,000 documents |
+| Document frequency | Documents containing a particular term | `python` appears in 1,000 documents |
+| Term frequency | Occurrences of a term in one document | `python` occurs 3 times in one document |
+| IDF | Weight calculated from document count and document frequency | Rarer terms receive a larger weight |
+
+`search(documents, query)` remains available for milestone 1 compatibility, but
+that convenience function constructs a new index each time. Reuse a `BM25Index`
+instance for repeated queries. Separate `python -m src.cli search` invocations
+are separate processes and cannot share an in-memory object; the benchmark
+explicitly reuses one instance in a single process.
+
+### Performance experiment
+
+```bash
+source .venv/bin/activate
+python -m src.cli benchmark --documents 10000 --top-k 3
+```
+
+The generator cycles through ten subject categories and uses a fixed random seed.
+Keyword repetitions, detail counts, and occasional cross-topic sentences vary
+term frequencies, document lengths, and matches. The dataset is generated only
+in memory; nothing is saved to `data/documents.json` or committed to Git.
+
+The command uses `time.perf_counter()` to measure separately:
+
+1. Document generation, including text assembly.
+2. Construction of one BM25 index, including document copies and all statistics.
+3. Each of four queries against that same index, including query tokenization,
+   candidate selection, scoring, sorting, and selection of results.
+
+Printing is outside the timed regions. Output includes actual durations and
+ranked scores. The experiment demonstrates the one-time indexing cost separately
+from repeated search costs on 10,000 documents. It does not claim a measured
+speedup over milestone 1, which is not timed alongside it. Timings vary with
+hardware, system load, and corpus; tests have no fixed speed thresholds.
+
+### Source-code walkthrough
+
+- `src/tokenizer.py`: converts document and query text into lowercase tokens.
+- `src/store.py`: validates, loads, and atomically saves JSON documents.
+- `src/bm25_search.py`: `BM25Index.__init__` builds corpus statistics, postings,
+  and an ID-to-position map; `candidate_document_ids` unions postings;
+  `_score_document` explains the unchanged formula; `search` scores candidates
+  and ranks results.
+  The module-level `search` preserves the original interface.
+- `src/cli.py`: parses user commands and dispatches storage, search, and benchmark.
+- `src/benchmark.py`: generates varied documents and measures one build and
+  multiple searches without writing a dataset; reports actual candidate counts.
+- `tests/test_bm25_search.py`: preserves milestone 1 tests and checks stored
+  statistics, reuse without recounting or IDF calculation, rankings, snapshot
+  behavior, edge cases, and benchmark generation and reuse. Milestone 3 adds
+  postings checks, scorer-call checks, and an independent full-scan reference.
+
+### Current limitations
+
+The index lasts only for the Python process. It uses memory for both tokens and
+counts for inspection and learning. Treat its public statistics as read-only.
+Adding or editing documents requires constructing a new index: an existing
+instance is a snapshot and does not watch the JSON file. There is no incremental
+update, disk-persisted index, or concurrency control for writers. Milestone 3
+uses an inverted index, but still sorts all positive matches even for small
+values of top-k. The synthetic corpus is a controlled learning experiment, not
+a substitute for measuring retrieval quality on real documents.
+
+
+## Milestone 3: inverted index and candidate scoring
+
+An **inverted index** maps a term to the documents containing it. A **posting
+list** is simply the collection of document references stored for one term:
+
+```text
+ssh -> [12, 81, 1272, 1822]
+```
+
+This means those four document IDs contain `ssh`. Our implementation uses a
+Python set for each term rather than a list, so repeated occurrences do not add
+duplicate IDs. Term frequency is stored separately for BM25. Postings include
+both title and text tokens. IDs are actual document IDs, not positions: a separate
+`document_positions` dictionary locates each ID in the existing statistics lists.
+IDs must be unique; construction rejects duplicates instead of silently losing
+a document from the postings.
+
+Search engines use these mappings to avoid inspecting documents that cannot
+match. Milestone 2 reused statistics but its scoring loop still visited all N
+documents, so the scanning cost grew roughly linearly with corpus size for a
+fixed query. Milestone 3 selects **candidates**: documents with at least one
+query term, which are the only documents capable of a positive BM25 score.
+
+```text
+python      -> {1, 6, 10}
+programming -> {1, 20}
+union       -> {1, 6, 10, 20}
+```
+
+We use the **union**, not the intersection, because normal BM25 also ranks partial
+matches. Requiring every term would discard relevant partial matches and change
+the existing behavior. Unknown terms have empty postings. Empty queries and
+queries containing only unknown terms have no candidates and score no documents.
+Repeated query terms cannot duplicate candidates or increase their scores.
+
+Candidate selection only answers which documents might be relevant. BM25 still
+orders them using term frequency, IDF, saturation, and length normalization. The
+formula, `k1 = 1.5`, `b = 0.75`, corpus-wide statistics, descending score order,
+and ascending-ID tie breaking are unchanged. IDF and average length continue to
+use the entire corpus, not just the candidate subset.
+
+### Work at construction and at query time
+
+Once at construction:
+
+1. Copy documents and tokenize their title + text.
+2. Store lengths and term frequencies; count each term once per document.
+3. Add the document ID to each unique term's postings during that same pass.
+4. Calculate average length and IDF across the complete corpus.
+
+Once per query:
+
+1. Tokenize the query and deduplicate its terms.
+2. Look up postings and explicitly union their document IDs.
+3. Record the candidate set's size in `last_candidate_count`.
+4. Locate and BM25-score only those IDs.
+5. Sort positive results by score and ID, then return top-k.
+
+The benchmark prints `last_candidate_count` immediately after each search. It is
+the size of the actual set used for scoring, before top-k truncation, with no
+second candidate lookup. Each successful search replaces this count, including
+empty and unknown queries. It describes the most recent search on that instance
+and is intended for sequential inspection, not concurrent query reporting.
+
+### Benchmark and trade-offs
+
+Run the original seeded generator and original four queries at both sizes:
+
+```bash
+python -m src.cli benchmark --documents 10000 --top-k 3
+python -m src.cli benchmark --documents 100000 --top-k 3
+```
+
+Corpus generation and query strings are unchanged from milestone 2. Generation,
+index construction, and each complete search are timed separately with
+`perf_counter()`. Query timing includes candidate selection, scoring, sorting,
+and top-k; printing happens afterwards. Generated documents stay in memory.
+
+Postings and the ID lookup require additional memory and construction work. In
+return, selective queries avoid most document scoring. Common query terms may
+still select most or all of the corpus, so an inverted index does not guarantee
+sublinear work for every query. Postings union costs depend on the matching
+posting sizes; scoring depends on candidate count and query length. All matches
+are still sorted, even when only three results are requested.
+
+The index remains an in-memory snapshot and must be rebuilt when documents
+change. Tokens, term counts, and postings are deliberately kept explicit for
+learning, with no compression or index persistence. There is still no stemming,
+phrase search, database, API, UI, vector search, or AI. Milestone 3 stops at
+candidate selection, exact BM25 scoring, and performance comparison.
+
+### Measured milestone 3 run
+
+On this VPS, using the commands above (seconds, one run at each size):
+
+| Documents | Generation | Index build |
+| --- | ---: | ---: |
+| 10,000 | 0.034197 | 0.200664 |
+| 100,000 | 0.308857 | 2.645455 |
+
+| Query | Candidates (10k) | Search (10k) | Candidates (100k) | Search (100k) |
+| --- | ---: | ---: | ---: | ---: |
+| python programming | 1,000 | 0.002943 | 10,000 | 0.047310 |
+| SSH security server | 1,141 | 0.002690 | 11,521 | 0.044349 |
+| bread water | 2,063 | 0.005351 | 20,648 | 0.066024 |
+| astronomy telescope planets | 1,113 | 0.002680 | 11,430 | 0.043557 |
+
+Top three results are listed in rank order below. Titles follow the generator's
+`<topic> notes <ID>` format. All three results in each row have the displayed
+score (rounded to four decimal places).
+
+| Documents | Query | Topic | Ranked IDs | Score |
+| --- | --- | --- | --- | ---: |
+| 10,000 | python programming | Python programming | 1, 61, 241 | 8.5778 |
+| 10,000 | SSH security server | Linux servers | 1272, 1822, 1952 | 11.9385 |
+| 10,000 | bread water | Cooking | 706, 856, 866 | 7.0440 |
+| 10,000 | astronomy telescope planets | Astronomy | 738, 1118, 1518 | 12.5612 |
+| 100,000 | python programming | Python programming | 1, 61, 241 | 8.5756 |
+| 100,000 | SSH security server | Linux servers | 1272, 1822, 1952 | 11.9119 |
+| 100,000 | bread water | Cooking | 706, 856, 866 | 7.0344 |
+| 100,000 | astronomy telescope planets | Astronomy | 78, 228, 288 | 12.5060 |
+
+At 100,000 documents, measured query times of 0.043557–0.066024 seconds are below
+the supplied milestone 2 baseline range of approximately 0.095–0.119 seconds.
+This run shows an improvement against that historical range, not a controlled
+per-query speedup ratio. Construction took 2.645455 seconds versus the supplied
+historical build time of about 1.65 seconds. Memory use was not measured. These
+are observations from a single run, not speed guarantees; system load and
+hardware affect timings. Scores and even rankings can change between corpus
+sizes because IDF and average document length change.
