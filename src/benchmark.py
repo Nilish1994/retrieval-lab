@@ -107,7 +107,9 @@ def generate_documents(document_count: int, seed: int = 42) -> list[dict]:
     return documents
 
 
-def run_benchmark(document_count: int = 10000, top_k: int = 3) -> None:
+def run_benchmark(
+    document_count: int = 10000, top_k: int = 3, stemming: bool = False
+) -> None:
     """Time generation, one construction, and individual searches on that index."""
     if top_k < 1:
         raise ValueError("top_k must be at least 1")
@@ -117,9 +119,11 @@ def run_benchmark(document_count: int = 10000, top_k: int = 3) -> None:
     generation_seconds = perf_counter() - start_time
 
     start_time = perf_counter()
-    index = BM25Index(documents)
+    index = BM25Index(documents, stemming=stemming)
     index_seconds = perf_counter() - start_time
 
+    mode = "Porter stemming" if stemming else "Exact tokens"
+    print(f"Mode: {mode}")
     print(f"Documents: {index.document_count}")
     print(f"Generation time: {generation_seconds:.6f} seconds")
     print(f"Index build time: {index_seconds:.6f} seconds")

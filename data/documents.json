@@ -33,5 +33,15 @@
     "id": 7,
     "title": "VPS SSH Security",
     "text": "SSH public keys secure access to a Linux VPS server. Password authentication can be disabled for stronger server security."
+  },
+  {
+    "id": 8,
+    "title": "Linux Python Automation",
+    "text": "Python scripts can automate Linux server administration and security checks."
+  },
+  {
+    "id": 9,
+    "title": "Python Cooking Notes",
+    "text": "Python examples are used in this document alongside notes about bread and cooking."
   }
 ]

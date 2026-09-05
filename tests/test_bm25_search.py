@@ -168,8 +168,8 @@ def test_benchmark_constructs_one_index_for_all_queries(monkeypatch, capsys):
     original_index = benchmark.BM25Index
     constructed_indexes = []
 
-    def record_construction(documents):
-        index = original_index(documents)
+    def record_construction(documents, stemming=False):
+        index = original_index(documents, stemming=stemming)
         constructed_indexes.append(index)
         return index
 

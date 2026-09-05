@@ -1,9 +1,9 @@
-# Retrieval lab — milestones 1, 2, and 3
+# Retrieval lab — milestones 1, 2, 3, and 4A
 
 Local keyword retrieval in Python using BM25. The local document collection lives in
 `data/documents.json`; milestone 1 included six sample documents. No AI services, LLMs, embeddings, vector databases,
-PostgreSQL, or web UI are used. Search uses the Python standard library;
-pytest is the only development dependency.
+PostgreSQL, or web UI are used. BM25 uses the Python standard library; optional
+Porter stemming uses NLTK. Pytest is the development dependency.
 
 ## Setup and commands
 
@@ -65,13 +65,16 @@ tokens returns no results.
 1. Load and validate the JSON document list.
 2. Build an index: lowercase title + text and extract letter/digit runs, splitting
    on punctuation (including underscores) and whitespace.
-3. Store tokens, term counts, lengths, average length, document frequency, and IDF
+3. Optionally apply Porter stemming to document tokens, then store normalized
+   tokens, term counts, lengths, average length, document frequency, and IDF
    once during construction; also build term-to-document-ID postings.
-4. For each query, tokenize it identically and union the matching postings.
+4. For each query, apply the same tokenization and optional stemming, then union
+   the matching postings.
 5. Score only those candidate IDs using the existing BM25 statistics.
 6. Remove zero scores, sort descending, and display the top k matches.
 
-There is no stemming, stop-word removal, phrase matching, or query expansion.
+Exact tokens are the default; `--stemming` enables Porter normalization. There
+is no stop-word removal, phrase matching, or query expansion.
 Repeated query terms count once. An index reuses statistics across searches.
 A new CLI search process builds a fresh index, so newly added documents are
 searchable on the next invocation. Search visits only candidate documents.
@@ -163,16 +166,19 @@ hardware, system load, and corpus; tests have no fixed speed thresholds.
 
 ### Source-code walkthrough
 
-- `src/tokenizer.py`: converts document and query text into lowercase tokens.
+- `src/tokenizer.py`: `tokenize` produces lowercase tokens; `normalize_tokens`
+  optionally reduces them with NLTK Porter. Both index and query use this layer.
 - `src/store.py`: validates, loads, and atomically saves JSON documents.
 - `src/bm25_search.py`: `BM25Index.__init__` builds corpus statistics, postings,
   and an ID-to-position map; `candidate_document_ids` unions postings;
   `_score_document` explains the unchanged formula; `search` scores candidates
   and ranks results.
   The module-level `search` preserves the original interface.
-- `src/cli.py`: parses user commands and dispatches storage, search, and benchmark.
+- `src/cli.py`: parses storage, search, benchmark, and `analyze` commands;
+  forwards `--stemming` to search and benchmark.
 - `src/benchmark.py`: generates varied documents and measures one build and
-  multiple searches without writing a dataset; reports actual candidate counts.
+  multiple searches without writing a dataset; reports mode and actual candidate
+  counts. The generator and queries are identical in both modes.
 - `tests/test_bm25_search.py`: preserves milestone 1 tests and checks stored
   statistics, reuse without recounting or IDF calculation, rankings, snapshot
   behavior, edge cases, and benchmark generation and reuse. Milestone 3 adds
@@ -277,9 +283,9 @@ are still sorted, even when only three results are requested.
 
 The index remains an in-memory snapshot and must be rebuilt when documents
 change. Tokens, term counts, and postings are deliberately kept explicit for
-learning, with no compression or index persistence. There is still no stemming,
-phrase search, database, API, UI, vector search, or AI. Milestone 3 stops at
-candidate selection, exact BM25 scoring, and performance comparison.
+learning, with no compression or index persistence. Milestone 3 used exact
+tokens only; milestone 4A adds optional stemming below. There is still no phrase
+search, database, API, UI, vector search, or AI.
 
 ### Measured milestone 3 run
 
@@ -320,3 +326,197 @@ historical build time of about 1.65 seconds. Memory use was not measured. These
 are observations from a single run, not speed guarantees; system load and
 hardware affect timings. Scores and even rankings can change between corpus
 sizes because IDF and average document length change.
+
+
+## Milestone 4A: exact tokens versus Porter stems
+
+The original failures came from exact token lookup: `servers` was absent from
+postings containing `server`; `secure` and `security`, or `automate` and
+`automation`, were separate terms. Lowercasing and punctuation splitting do not
+connect these forms.
+
+**Stemming** mechanically reduces word forms using spelling rules. **Porter** is
+a classical suffix-stripping algorithm. A **token** is a unit extracted from
+text, such as `security`. A **stem** is the algorithm's reduced form, such as
+`secur`; it need not be a dictionary word. We use `nltk.stem.PorterStemmer` with
+its explicit `NLTK_EXTENSIONS` mode, which is NLTK's default Porter variant.
+See the [official NLTK Porter documentation](https://www.nltk.org/api/nltk.stem.porter.html)
+for its modes. `requirements.txt` pins the installed NLTK version to 3.10.3.
+No WordNet, tokenizer datasets, or other NLTK corpora are downloaded or required.
+Our existing regular-expression tokenizer still handles tokenization.
+
+### Selecting and inspecting normalization
+
+```bash
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m src.cli search "servers"
+python -m src.cli search "servers" --stemming
+python -m src.cli search "security" --stemming
+python -m src.cli analyze "servers security automation"
+```
+
+The analyze command runs the same tokenizer and normalization function used in
+search. Its actual output is:
+
+```text
+Original tokens: servers security automation
+Porter stems: server secur autom
+```
+
+Actual verified pairs in this version:
+
+| Original forms | Porter stem |
+| --- | --- |
+| server / servers | server |
+| secure / security | secur |
+| automate / automation | autom |
+
+These are algorithm outputs, not manually coded substitutions. Original document
+titles and text remain intact for result display and storage.
+
+```python
+from src.bm25_search import BM25Index
+from src.store import load_documents
+
+documents = load_documents()
+exact_index = BM25Index(documents, stemming=False)
+stemmed_index = BM25Index(documents, stemming=True)
+exact_results = exact_index.search("servers")
+stemmed_results = stemmed_index.search("servers")
+print(stemmed_index.last_candidate_count)
+```
+
+The module-level `search(documents, query, top_k=5, stemming=False)` wrapper also
+supports the option. Build a new index to change modes; treat `index.stemming`
+and the other index attributes as read-only. Each index must use one consistent
+normalization mode for both documents and queries.
+
+### Document and query flow
+
+```text
+text
+ ↓
+tokenize and lowercase
+ ↓
+stem each token (optional)
+ ↓
+inverted index
+ ↓
+BM25
+```
+
+On the document side, `tokenize` extracts lowercase tokens and `normalize_tokens`
+returns exact tokens or stems. Term counts, document frequency, IDF, and postings
+are all built from that output. `tokenized_documents` holds the terms actually
+indexed, so it contains stems when stemming is enabled. Occurrences are preserved:
+`secure security` becomes `secur secur`, with term frequency 2. Document frequency
+counts the merged term once per document, and postings contain each ID once.
+Stemming changes spelling, not token count, so document lengths are preserved.
+
+On the query side, the same functions run with the index's mode. Deduplication
+happens **after** normalization: `server servers` contributes `server` once.
+Already-normalized terms are passed to `candidate_document_ids`, which unions
+postings as before. Normalizing only one side would cause missed matches.
+
+BM25 itself needs no English rules and is unchanged. It uses the frequencies of
+whatever terms it receives. Merging word forms can change document frequencies,
+IDF, candidates, scores, and ranking. The same `k1`, `b`, IDF formula, length
+normalization, union behavior, descending scores, and ascending-ID tie breaking
+still apply. Exact mode preserves milestone 3 results.
+
+### Limits: over-stemming and under-stemming
+
+**Over-stemming** merges words too aggressively. In this implementation,
+`universe` and `university` both become `univers`, even though a university and
+the universe are different things. Extra matches can reduce precision.
+
+**Under-stemming** leaves related forms separate. Here, `generous` becomes
+`gener`, while `generosity` becomes `generos`. The spelling rules do not connect
+this pair, so a relevant document can still be missed. These examples were
+checked against the installed implementation.
+
+Porter does not understand meaning, context, or intent. It is not semantic
+search and is not linguistically perfect. It is most appropriate for English
+word forms; the tokenizer accepting Unicode does not make the stemmer
+multilingual. Lemmatization, synonyms, spelling correction, and semantic methods
+remain outside milestone 4A so the effect of this one classical technique is
+visible in isolation.
+
+### Validation and performance experiment
+
+`tests/test_stemming.py` covers the verified Porter forms, exact-mode isolation,
+normalized statistics/postings, candidate-only scoring, scores against an
+independently normalized corpus, query deduplication, empty and unknown queries,
+CLI search/analyze, benchmark mode selection, and a fresh process with NLTK data
+lookup and download functions disabled. The prior tests retain their assertions;
+the benchmark constructor spy forwards the new optional mode argument.
+
+```bash
+python -m pytest -q
+python -m src.cli benchmark --documents 100000 --top-k 3
+python -m src.cli benchmark --documents 100000 --top-k 3 --stemming
+```
+
+Both benchmark modes use the same seeded documents and four queries. The only
+normalization difference is Porter stemming. Timed index construction includes
+normalizing every document token; timed queries include query normalization.
+Generation and printing boundaries are unchanged. Stemming adds work and may
+merge postings, so timing changes are not evidence of a speed optimization.
+This milestone evaluates retrieval behavior, not performance improvements.
+
+
+### Observed local comparison
+
+These results use the existing nine local documents, with no dataset edits.
+The query column is also the original token sequence; all examples are already
+lowercase and punctuation-free. Exact mode indexes those tokens unchanged.
+Results list `[document ID] score` in rank order, using default top-k 5.
+
+Titles: [1] Python programming; [4] Sourdough bread; [6] Python text processing;
+[7] VPS SSH Security; [8] Linux Python Automation; [9] Python Cooking Notes.
+
+| Query / original tokens | Porter tokens | Candidates exact / Porter | Exact ranked results | Porter ranked results |
+| --- | --- | --- | --- | --- |
+| automate | autom | 1 / 2 | [8] 2.2160 | [8] 2.2073; [1] 1.4235 |
+| automation | autom | 2 / 2 | [8] 1.6193; [1] 1.4235 | [8] 2.2073; [1] 1.4235 |
+| server | server | 2 / 2 | [7] 1.8887; [8] 1.6193 | [7] 1.8887; [8] 1.6193 |
+| servers | server | 0 / 2 | No matches | [7] 1.8887; [8] 1.6193 |
+| secure | secur | 1 / 2 | [7] 1.7763 | [7] 2.2264; [8] 1.6193 |
+| security | secur | 2 / 2 | [7] 1.8887; [8] 1.6193 | [7] 2.2264; [8] 1.6193 |
+| python bread | python bread | 5 / 5 | [9] 2.6996; [4] 2.2548; [1] 1.3505; [8] 1.2714; [6] 1.1429 | [9] 2.6996; [4] 2.2548; [1] 1.3505; [8] 1.2714; [6] 1.1429 |
+
+Exact mode was also compared directly with the committed milestone 3 index on
+11 queries and produced identical results and scores. `python bread` produced
+identical results in both normalization modes on this local corpus.
+
+### Observed 100,000-document benchmark
+
+Actual seconds from one run in each mode:
+
+| Mode | Generation | Index build |
+| --- | ---: | ---: |
+| Exact | 0.305901 | 3.712621 |
+| Porter | 0.331322 | 27.678905 |
+
+| Query | Exact candidates | Exact search | Porter candidates | Porter search |
+| --- | ---: | ---: | ---: | ---: |
+| python programming | 10,000 | 0.038003 | 10,000 | 0.038397 |
+| SSH security server | 11,521 | 0.042809 | 11,521 | 0.040521 |
+| bread water | 20,648 | 0.065155 | 21,354 | 0.069290 |
+| astronomy telescope planets | 11,430 | 0.038962 | 11,430 | 0.042642 |
+
+Both modes returned these top-three IDs in order. Each row's three results
+share the displayed score in that mode, rounded to four decimal places.
+
+| Query | Result topic | Ranked IDs | Exact score | Porter score |
+| --- | --- | --- | ---: | ---: |
+| python programming | Python programming | 1, 61, 241 | 8.5756 | 8.5756 |
+| SSH security server | Linux servers | 1272, 1822, 1952 | 11.9119 | 12.1425 |
+| bread water | Cooking | 706, 856, 866 | 7.0344 | 6.9723 |
+| astronomy telescope planets | Astronomy | 78, 228, 288 | 12.5060 | 12.5060 |
+
+Stemming added substantial indexing work in this implementation. Query times
+were similar in this run; no speed improvement is claimed. Merged terms can
+increase candidate counts and change scores, as seen above. Timings depend on
+system load and are observations, not guarantees or timing-test thresholds.

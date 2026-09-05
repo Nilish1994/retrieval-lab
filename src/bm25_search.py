@@ -7,18 +7,20 @@ Search unions query-term postings, scores only those candidates, and ranks them.
 from collections import Counter
 from math import log
 
-from .tokenizer import tokenize
+from .tokenizer import normalize_tokens, tokenize
 
 
 class BM25Index:
     """An in-memory snapshot of documents and their reusable BM25 statistics.
 
     Treat the stored attributes as read-only. Build a new instance when the
-    corpus changes so document lengths, frequencies, and IDF stay consistent.
+    corpus or normalization mode changes so frequencies, IDF, and postings stay
+    consistent. Exact tokens are the default; stemming applies to both sides.
     """
 
-    def __init__(self, documents: list[dict]) -> None:
+    def __init__(self, documents: list[dict], stemming: bool = False) -> None:
         """Copy and tokenize documents; build corpus statistics and term postings."""
+        self.stemming = stemming
         self.documents = []
         self.tokenized_documents = []
         self.document_lengths = []
@@ -47,10 +49,11 @@ class BM25Index:
             self.documents.append(document.copy())
             document_text = document["title"] + " " + document["text"]
             document_tokens = tokenize(document_text)
-            document_length = len(document_tokens)
-            term_counts = Counter(document_tokens)
+            normalized_tokens = normalize_tokens(document_tokens, self.stemming)
+            document_length = len(normalized_tokens)
+            term_counts = Counter(normalized_tokens)
 
-            self.tokenized_documents.append(document_tokens)
+            self.tokenized_documents.append(normalized_tokens)
             self.document_lengths.append(document_length)
             self.term_frequencies.append(term_counts)
             total_tokens += document_length
@@ -94,7 +97,7 @@ class BM25Index:
         return score
 
     def candidate_document_ids(self, query_terms: list[str]) -> set[int]:
-        """Union postings so a document may match any query term, not all terms."""
+        """Union postings for already-normalized terms; any term may match."""
         candidate_document_ids = set()
         for query_term in query_terms:
             matching_document_ids = self.inverted_index.get(query_term, set())
@@ -107,9 +110,10 @@ class BM25Index:
             raise ValueError("top_k must be at least 1")
 
         query_tokens = tokenize(query)
-        # Preserve milestone 1: repeated query terms contribute only once.
+        normalized_tokens = normalize_tokens(query_tokens, self.stemming)
+        # Deduplicate after normalization: forms sharing a stem count only once.
         # Sorting also makes floating-point addition order repeatable.
-        query_terms = sorted(set(query_tokens))
+        query_terms = sorted(set(normalized_tokens))
         candidate_document_ids = self.candidate_document_ids(query_terms)
         self.last_candidate_count = len(candidate_document_ids)
         if not candidate_document_ids:
@@ -136,7 +140,9 @@ def _ranking_key(result: dict) -> tuple[float, int]:
     return (-result["score"], result["id"])
 
 
-def search(documents: list[dict], query: str, top_k: int = 5) -> list[dict]:
+def search(
+    documents: list[dict], query: str, top_k: int = 5, stemming: bool = False
+) -> list[dict]:
     """Keep the milestone 1 API; use BM25Index directly to reuse indexing work."""
-    index = BM25Index(documents)
+    index = BM25Index(documents, stemming=stemming)
     return index.search(query, top_k)
