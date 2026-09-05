@@ -1,0 +1,37 @@
+[
+  {
+    "id": 1,
+    "title": "Python programming",
+    "text": "Python is a programming language for scripts, automation, and data analysis. Python functions organize reusable code."
+  },
+  {
+    "id": 2,
+    "title": "BM25 search ranking",
+    "text": "BM25 ranks documents for keyword search. Ranking combines term frequency, inverse document frequency, and document length normalization."
+  },
+  {
+    "id": 3,
+    "title": "Inverted indexes",
+    "text": "An inverted index maps each term to documents containing that term. Search engines use indexes to find keyword matches quickly."
+  },
+  {
+    "id": 4,
+    "title": "Sourdough bread",
+    "text": "Sourdough bread uses flour, water, salt, and a starter. Fermentation develops flavor before baking bread in a hot oven."
+  },
+  {
+    "id": 5,
+    "title": "Garden tomatoes",
+    "text": "Tomatoes grow best with sunlight, water, and rich soil. Garden plants need regular watering and support as fruit grows."
+  },
+  {
+    "id": 6,
+    "title": "Python text processing",
+    "text": "Python scripts process text documents. Tokenization converts text into terms for keyword search and document ranking."
+  },
+  {
+    "id": 7,
+    "title": "VPS SSH Security",
+    "text": "SSH public keys secure access to a Linux VPS server. Password authentication can be disabled for stronger server security."
+  }
+]
