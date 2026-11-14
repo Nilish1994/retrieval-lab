@@ -1,5 +1,7 @@
 # Retrieval lab — milestones 1, 2, 3, and 4A
 
+[![DOI](https://zenodo.org/badge/1357773047.svg)](https://doi.org/10.5281/zenodo.24214970)
+
 Local keyword retrieval in Python using BM25. The local document collection lives in
 `data/documents.json`; milestone 1 included six sample documents. No AI services, LLMs, embeddings, vector databases,
 PostgreSQL, or web UI are used. BM25 uses the Python standard library; optional
