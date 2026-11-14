@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "Retrieval lab: BM25 search engine in Python"
+abstract: "A local keyword search engine built from scratch in Python: BM25 ranking, inverted index, optional Porter stemming and a CLI."
+authors:
+  - family-names: Aluthwatta
+    given-names: Nilish
+    orcid: "https://orcid.org/0009-0001-3628-8363"
+repository-code: "https://github.com/Nilish1994/retrieval-lab"
+license: MIT
+version: 1.0.0
+date-released: 2026-11-14
+keywords:
+  - python
+  - bm25
+  - information retrieval
+  - search engine

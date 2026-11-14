@@ -1,0 +1,13 @@
+{
+  "title": "Retrieval lab: BM25 search engine in Python",
+  "upload_type": "software",
+  "description": "A local keyword search engine built from scratch in Python. It implements BM25 ranking with an inverted index, optional Porter stemming and a command-line interface, with pytest tests. No external search services, embeddings or databases are used.",
+  "creators": [
+    {
+      "name": "Aluthwatta, Nilish",
+      "orcid": "0009-0001-3628-8363"
+    }
+  ],
+  "license": "MIT",
+  "keywords": ["python", "bm25", "information retrieval", "search engine", "inverted index"]
+}
